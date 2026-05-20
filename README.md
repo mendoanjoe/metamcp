@@ -430,6 +430,66 @@ If you want to deploy it to a online service or a VPS, a instance of at least 2G
 
 Since MCP leverages SSE for long connection, if you are using reverse proxy like nginx, please refer to an example setup [nginx.conf.example](nginx.conf.example)
 
+### Non-Docker VPS deployment via GitHub Actions
+
+This repo includes a non-Docker deployment workflow at:
+
+- `.github/workflows/deploy-vps.yml`
+
+It builds the project on GitHub Actions, syncs files to your VPS over SSH, idempotently provisions the host (Node.js LTS + PostgreSQL + systemd), installs production dependencies on VPS, and restarts the `metamcp` service.
+
+#### VPS prerequisites (one-time)
+
+1. Ubuntu/Debian VPS (DigitalOcean Droplet recommended).
+2. SSH user with `sudo` privileges.
+3. Add your GitHub Actions deploy key public key to that user on the VPS.
+4. Ensure inbound ports are open as needed (typically `22`, `80`, `443`, app port if directly exposed).
+
+#### GitHub Actions Secrets
+
+Set these in **Repository → Settings → Secrets and variables → Actions**:
+
+- `VPS_HOST` (VPS IP or hostname)
+- `VPS_USER` (SSH user)
+- `VPS_SSH_KEY` (private key content)
+- `VPS_PORT` (optional, defaults to `22`)
+- `VPS_APP_USER` (optional; service user, defaults to `VPS_USER`)
+- `APP_URL` (public URL used by MetaMCP auth/cors)
+- `BETTER_AUTH_SECRET` (runtime secret)
+- `DB_NAME` (PostgreSQL database name)
+- `DB_USER` (PostgreSQL role/user)
+- `DB_PASSWORD` (PostgreSQL password)
+- `DB_HOST` (optional, defaults to `127.0.0.1`)
+- `DB_PORT` (optional, defaults to `5432`)
+- `METAMCP_EXTRA_ENV` (optional multiline env content appended to runtime env file)
+
+> `DB_NAME`/`DB_USER`/`DB_PASSWORD` are used by the idempotent PostgreSQL provisioning script (`deploy/vps/setup-postgres.sh`).
+
+#### Runtime environment file
+
+The deploy process writes runtime vars to:
+
+- `/etc/metamcp/metamcp.env`
+
+This file is used by systemd (`EnvironmentFile=`) and is regenerated on each deployment from GitHub Secrets.
+
+#### Service and deploy scripts included
+
+- `deploy/vps/provision-vps.sh` – idempotent OS + Node + service provisioning
+- `deploy/vps/setup-postgres.sh` – idempotent PostgreSQL role/database setup
+- `deploy/vps/write-env-file.sh` – writes `/etc/metamcp/metamcp.env`
+- `deploy/vps/start-metamcp.sh` – starts backend (`apps/backend/dist/index.js`) and frontend (`pnpm --filter frontend start`)
+- `deploy/vps/metamcp.service` – systemd service template
+
+#### Operations and logs on VPS
+
+```bash
+sudo systemctl status metamcp --no-pager
+sudo systemctl restart metamcp
+sudo journalctl -u metamcp -n 200 --no-pager
+sudo journalctl -u metamcp -f
+```
+
 ## 🏗️ Architecture
 
 - **Frontend**: Next.js

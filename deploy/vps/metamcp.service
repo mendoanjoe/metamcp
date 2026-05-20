@@ -1,0 +1,21 @@
+[Unit]
+Description=MetaMCP (non-Docker)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=__APP_USER__
+Group=__APP_USER__
+WorkingDirectory=__APP_DIR__
+EnvironmentFile=__ENV_FILE__
+ExecStart=/usr/bin/env bash __APP_DIR__/deploy/vps/start-metamcp.sh
+Restart=always
+RestartSec=5
+KillMode=control-group
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
