@@ -1,0 +1,143 @@
+name: Deploy to VPS (no Docker)
+
+on:
+  push:
+  workflow_dispatch:
+
+env:
+  APP_DIR: /opt/metamcp
+  ENV_FILE_PATH: /etc/metamcp/metamcp.env
+  SERVICE_NAME: metamcp
+
+jobs:
+  deploy:
+    name: Build and deploy to VPS
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.ref_name == github.event.repository.default_branch
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Prepare SSH key
+        env:
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -p "${VPS_PORT:-22}" -H "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Ensure app directory exists on VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          ssh -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "sudo mkdir -p '${APP_DIR}' && sudo chown -R '${VPS_USER}:${VPS_USER}' '${APP_DIR}'"
+
+      - name: Create deployment inputs file
+        env:
+          VPS_USER: ${{ secrets.VPS_USER }}
+          VPS_APP_USER: ${{ secrets.VPS_APP_USER }}
+          APP_URL: ${{ secrets.APP_URL }}
+          BETTER_AUTH_SECRET: ${{ secrets.BETTER_AUTH_SECRET }}
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_PORT: ${{ secrets.DB_PORT }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          METAMCP_EXTRA_ENV: ${{ secrets.METAMCP_EXTRA_ENV }}
+        run: |
+          set -euo pipefail
+          encode() { printf '%s' "$1" | base64 -w 0; }
+          cat > .deploy-inputs <<EOF
+          APP_DIR=${APP_DIR}
+          APP_USER=${VPS_APP_USER:-$VPS_USER}
+          ENV_FILE_PATH=${ENV_FILE_PATH}
+          SERVICE_NAME=${SERVICE_NAME}
+          APP_URL_B64=$(encode "$APP_URL")
+          BETTER_AUTH_SECRET_B64=$(encode "$BETTER_AUTH_SECRET")
+          DB_HOST_B64=$(encode "${DB_HOST:-127.0.0.1}")
+          DB_PORT_B64=$(encode "${DB_PORT:-5432}")
+          DB_NAME_B64=$(encode "$DB_NAME")
+          DB_USER_B64=$(encode "$DB_USER")
+          DB_PASSWORD_B64=$(encode "$DB_PASSWORD")
+          EXTRA_ENV_CONTENT_B64=$(encode "${METAMCP_EXTRA_ENV:-}")
+          EOF
+
+      - name: Sync repository to VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          rsync -az --delete \
+            --exclude='.git/' \
+            --exclude='**/node_modules/' \
+            --exclude='.turbo/' \
+            --exclude='apps/frontend/.next/cache/' \
+            --exclude='.env' \
+            -e "ssh -p ${VPS_PORT:-22}" \
+            ./ "${VPS_USER}@${VPS_HOST}:${APP_DIR}/"
+
+      - name: Provision and deploy on VPS
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_PORT: ${{ secrets.VPS_PORT }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          set -euo pipefail
+          ssh -p "${VPS_PORT:-22}" "${VPS_USER}@${VPS_HOST}" "bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          decode() { printf '%s' "$1" | base64 --decode; }
+          DEPLOY_INPUTS_PATH="/opt/metamcp/.deploy-inputs"
+
+          # shellcheck disable=SC1091
+          source "$DEPLOY_INPUTS_PATH"
+          export APP_URL="$(decode "$APP_URL_B64")"
+          export BETTER_AUTH_SECRET="$(decode "$BETTER_AUTH_SECRET_B64")"
+          export DB_HOST="$(decode "$DB_HOST_B64")"
+          export DB_PORT="$(decode "$DB_PORT_B64")"
+          export DB_NAME="$(decode "$DB_NAME_B64")"
+          export DB_USER="$(decode "$DB_USER_B64")"
+          export DB_PASSWORD="$(decode "$DB_PASSWORD_B64")"
+          export EXTRA_ENV_CONTENT="$(decode "$EXTRA_ENV_CONTENT_B64")"
+
+          cd "$APP_DIR"
+          chmod +x deploy/vps/*.sh
+
+          ./deploy/vps/provision-vps.sh
+          ./deploy/vps/setup-postgres.sh
+          ./deploy/vps/write-env-file.sh
+
+          corepack enable
+          pnpm install --frozen-lockfile --prod
+
+          sudo systemctl restart "$SERVICE_NAME"
+          sudo systemctl status "$SERVICE_NAME" --no-pager --full
+          rm -f "$APP_DIR/.deploy-inputs"
+          REMOTE
