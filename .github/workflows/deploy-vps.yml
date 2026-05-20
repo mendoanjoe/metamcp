@@ -14,6 +14,8 @@ jobs:
     name: Build and deploy to VPS
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch' || github.ref_name == github.event.repository.default_branch
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout
@@ -77,6 +79,7 @@ jobs:
           APP_USER=${VPS_APP_USER:-$VPS_USER}
           ENV_FILE_PATH=${ENV_FILE_PATH}
           SERVICE_NAME=${SERVICE_NAME}
+          PNPM_VERSION=9
           APP_URL_B64=$(encode "$APP_URL")
           BETTER_AUTH_SECRET_B64=$(encode "$BETTER_AUTH_SECRET")
           DB_HOST_B64=$(encode "${DB_HOST:-127.0.0.1}")
@@ -116,8 +119,13 @@ jobs:
           decode() { printf '%s' "$1" | base64 --decode; }
           DEPLOY_INPUTS_PATH="/opt/metamcp/.deploy-inputs"
 
-          # shellcheck disable=SC1091
+          # shellcheck disable=SC1091 # file is created locally on the workflow runner, then synced in the previous rsync step
           source "$DEPLOY_INPUTS_PATH"
+          cleanup() {
+            rm -f "$DEPLOY_INPUTS_PATH"
+          }
+          trap cleanup EXIT
+          export APP_DIR APP_USER ENV_FILE_PATH SERVICE_NAME PNPM_VERSION
           export APP_URL="$(decode "$APP_URL_B64")"
           export BETTER_AUTH_SECRET="$(decode "$BETTER_AUTH_SECRET_B64")"
           export DB_HOST="$(decode "$DB_HOST_B64")"
@@ -135,9 +143,8 @@ jobs:
           ./deploy/vps/write-env-file.sh
 
           corepack enable
-          pnpm install --frozen-lockfile --prod
+          pnpm install --frozen-lockfile --production
 
           sudo systemctl restart "$SERVICE_NAME"
           sudo systemctl status "$SERVICE_NAME" --no-pager --full
-          rm -f "$APP_DIR/.deploy-inputs"
           REMOTE

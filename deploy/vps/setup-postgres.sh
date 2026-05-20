@@ -14,49 +14,51 @@ else
   SUDO="sudo"
 fi
 
-escape_sql_literal() {
-  printf "%s" "$1" | sed "s/'/''/g"
-}
-
-db_name_sql="$(escape_sql_literal "$DB_NAME")"
-db_user_sql="$(escape_sql_literal "$DB_USER")"
-db_password_sql="$(escape_sql_literal "$DB_PASSWORD")"
-
 $SUDO systemctl enable postgresql
 $SUDO systemctl restart postgresql
 
-$SUDO -u postgres psql -v ON_ERROR_STOP=1 <<SQL
+$SUDO -u postgres psql -v ON_ERROR_STOP=1 \
+  -v db_user="$DB_USER" \
+  -v db_password="$DB_PASSWORD" <<'SQL'
 DO \$\$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${db_user_sql}') THEN
-    EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', '${db_user_sql}', '${db_password_sql}');
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'db_user') THEN
+    EXECUTE format('CREATE ROLE %I LOGIN PASSWORD %L', :'db_user', :'db_password');
   ELSE
-    EXECUTE format('ALTER ROLE %I WITH LOGIN PASSWORD %L', '${db_user_sql}', '${db_password_sql}');
+    EXECUTE format('ALTER ROLE %I WITH LOGIN PASSWORD %L', :'db_user', :'db_password');
   END IF;
 END
 \$\$;
 SQL
 
-$SUDO -u postgres psql -v ON_ERROR_STOP=1 <<SQL
+$SUDO -u postgres psql -v ON_ERROR_STOP=1 \
+  -v db_name="$DB_NAME" \
+  -v db_user="$DB_USER" <<'SQL'
 DO \$\$
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '${db_name_sql}') THEN
-    EXECUTE format('CREATE DATABASE %I OWNER %I', '${db_name_sql}', '${db_user_sql}');
+  IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'db_name') THEN
+    EXECUTE format('CREATE DATABASE %I OWNER %I', :'db_name', :'db_user');
   END IF;
 END
 \$\$;
 SQL
 
-$SUDO -u postgres psql -v ON_ERROR_STOP=1 <<SQL
-GRANT ALL PRIVILEGES ON DATABASE "${DB_NAME}" TO "${DB_USER}";
+$SUDO -u postgres psql -v ON_ERROR_STOP=1 \
+  -v db_name="$DB_NAME" \
+  -v db_user="$DB_USER" <<'SQL'
+DO \$\$
+BEGIN
+  EXECUTE format('GRANT ALL PRIVILEGES ON DATABASE %I TO %I', :'db_name', :'db_user');
+END
+\$\$;
 SQL
 
-if ! $SUDO -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='${db_name_sql}'" | grep -q 1; then
+if ! $SUDO -u postgres psql -v db_name="$DB_NAME" -tAc "SELECT 1 FROM pg_database WHERE datname = :'db_name'" | grep -q 1; then
   echo "PostgreSQL setup failed: database ${DB_NAME} was not created" >&2
   exit 1
 fi
 
-if ! $SUDO -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='${db_user_sql}'" | grep -q 1; then
+if ! $SUDO -u postgres psql -v db_user="$DB_USER" -tAc "SELECT 1 FROM pg_roles WHERE rolname = :'db_user'" | grep -q 1; then
   echo "PostgreSQL setup failed: role ${DB_USER} was not created" >&2
   exit 1
 fi

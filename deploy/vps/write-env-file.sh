@@ -19,6 +19,11 @@ else
   SUDO="sudo"
 fi
 
+if ! command -v node >/dev/null 2>&1; then
+  echo "Node.js is required to generate encoded DATABASE_URL." >&2
+  exit 1
+fi
+
 escape_env_value() {
   local value="$1"
   value="${value//\\/\\\\}"

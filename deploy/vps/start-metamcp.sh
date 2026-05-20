@@ -20,18 +20,43 @@ fi
 node apps/backend/dist/index.js &
 BACKEND_PID=$!
 
-PORT="$FRONTEND_PORT" pnpm --filter frontend start -- --port "$FRONTEND_PORT" &
+pnpm --filter frontend start -- --port "$FRONTEND_PORT" &
 FRONTEND_PID=$!
 
 cleanup() {
   kill "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || true
+  sleep 2
+  kill -9 "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || true
   wait "$BACKEND_PID" 2>/dev/null || true
   wait "$FRONTEND_PID" 2>/dev/null || true
 }
 
-trap cleanup TERM INT
+trap cleanup EXIT TERM INT
 
-wait -n "$BACKEND_PID" "$FRONTEND_PID"
-status=$?
-cleanup
-exit $status
+while true; do
+  if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+    if wait "$BACKEND_PID"; then
+      first_status=0
+    else
+      first_status=$?
+    fi
+    break
+  fi
+
+  if ! kill -0 "$FRONTEND_PID" 2>/dev/null; then
+    if wait "$FRONTEND_PID"; then
+      first_status=0
+    else
+      first_status=$?
+    fi
+    break
+  fi
+
+  sleep 1
+done
+
+if [ "$first_status" -ne 0 ]; then
+  exit "$first_status"
+fi
+
+exit 1

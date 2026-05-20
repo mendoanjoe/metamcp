@@ -6,6 +6,8 @@ APP_DIR="${APP_DIR:-/opt/metamcp}"
 APP_USER="${APP_USER:-$USER}"
 ENV_FILE_PATH="${ENV_FILE_PATH:-/etc/metamcp/metamcp.env}"
 SERVICE_NAME="${SERVICE_NAME:-metamcp}"
+PNPM_VERSION="${PNPM_VERSION:-9}"
+NODE_MAJOR="${NODE_MAJOR:-20}"
 
 if [ "$(id -u)" -eq 0 ]; then
   SUDO=""
@@ -16,12 +18,15 @@ fi
 $SUDO apt-get update
 $SUDO apt-get install -y ca-certificates curl gnupg rsync postgresql postgresql-contrib
 
-curl -fsSL https://deb.nodesource.com/setup_lts.x | $SUDO -E bash -
+$SUDO mkdir -p /etc/apt/keyrings
+curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | $SUDO gpg --dearmor --yes -o /etc/apt/keyrings/nodesource.gpg
+echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" | $SUDO tee /etc/apt/sources.list.d/nodesource.list >/dev/null
+$SUDO apt-get update
 $SUDO apt-get install -y nodejs
 
 if ! command -v pnpm >/dev/null 2>&1; then
   $SUDO corepack enable
-  $SUDO corepack prepare pnpm@9.0.0 --activate
+  $SUDO corepack prepare "pnpm@${PNPM_VERSION}" --activate
 fi
 
 $SUDO mkdir -p "$APP_DIR"
